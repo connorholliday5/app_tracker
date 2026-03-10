@@ -85,6 +85,31 @@ def render_metrics() -> None:
     col4.metric("Follow-Ups Needed", metrics["follow_ups_needed"])
 
 
+def render_job_search_stats() -> None:
+    st.subheader("Job Search Stats")
+
+    df = _get_all_df()
+
+    if df.empty:
+        st.info("No application data available for job search stats yet.")
+        return
+
+    total = len(df)
+    interviews = int((df["status"] == "interview").sum())
+    rejections = int((df["status"] == "rejected").sum())
+    offers = int((df["status"] == "offer").sum())
+    active_responses = interviews + rejections + offers
+
+    response_rate = round((active_responses / total) * 100, 1) if total else 0.0
+    interview_rate = round((interviews / total) * 100, 1) if total else 0.0
+    offer_rate = round((offers / total) * 100, 1) if total else 0.0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Response Rate", f"{response_rate}%")
+    col2.metric("Interview Rate", f"{interview_rate}%")
+    col3.metric("Offer Rate", f"{offer_rate}%")
+
+
 def render_status_breakdown() -> None:
     applications = get_all_applications()
 

@@ -10,6 +10,7 @@ from app.dashboard import (
     render_analytics,
     render_application_table,
     render_follow_up_alerts,
+    render_job_search_stats,
     render_metrics,
     render_status_breakdown,
 )
@@ -136,10 +137,34 @@ def get_export_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def generate_follow_up_email(row) -> str:
+    contact_name = (row["contact_name"] or "").strip()
+    greeting_name = contact_name if contact_name else "Hiring Team"
+    university = row["university"]
+    job_title = row["job_title"]
+    application_date = row["application_date"]
+
+    return f"""Subject: Follow-Up on {job_title} Application
+
+Dear {greeting_name},
+
+I hope you are doing well. I wanted to follow up on my application for the {job_title} position at {university}, which I submitted on {application_date}.
+
+I remain very interested in this opportunity and genuinely excited about the chance to contribute. The position strongly stands out to me because of how closely it aligns with my background and the kind of work I am hoping to grow in.
+
+I would be grateful for any update you may be able to share regarding the status of my application. Thank you again for your time and consideration.
+
+Best,
+Connor Holliday
+"""
 st.title("grad-app-tracker")
 st.caption("Graduate school and research application tracker")
 
 render_metrics()
+
+st.divider()
+
+render_job_search_stats()
 
 st.divider()
 
@@ -240,6 +265,32 @@ with export_col:
             file_name="grad_app_tracker_export.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+st.divider()
+
+st.subheader("Follow-Up Email Draft Generator")
+
+all_rows_for_email = get_all_applications()
+follow_up_candidates = [row for row in all_rows_for_email if int(row["follow_up_needed"]) == 1]
+
+if not follow_up_candidates:
+    st.info("No follow-up email drafts are needed right now.")
+else:
+    email_options = {
+        f'ID {row["id"]} | {row["university"]} | {row["job_title"]}': row["id"]
+        for row in follow_up_candidates
+    }
+
+    selected_email_label = st.selectbox(
+        "Select Application for Follow-Up Draft",
+        options=list(email_options.keys()),
+    )
+    selected_email_id = email_options[selected_email_label]
+    selected_email_row = get_application_by_id(selected_email_id)
+
+    if selected_email_row:
+        email_draft = generate_follow_up_email(selected_email_row)
+        st.text_area("Generated Follow-Up Email", value=email_draft, height=280)
 
 st.divider()
 
