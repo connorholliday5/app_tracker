@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from app.models import Application
 from app.utils import (
-    calculate_follow_up_needed,
     date_to_iso,
     normalize_required_text,
     normalize_status,
@@ -27,10 +26,26 @@ def get_connection() -> sqlite3.Connection:
     return connection
 
 
+def calculate_follow_up_needed(status: str, application_date: str, follow_up_date: Optional[str]) -> bool:
+    normalized_status = normalize_status(status)
+    applied_on = parse_iso_date(application_date, "application_date", required=True)
+    followed_up_on = parse_iso_date(follow_up_date, "follow_up_date", required=False)
+
+    if normalized_status != "applied":
+        return False
+
+    if followed_up_on is not None:
+        return False
+
+    from datetime import date
+    days_since_application = (date.today() - applied_on).days
+    return days_since_application >= 14
+
+
 def initialize_database() -> None:
     with get_connection() as conn:
         conn.execute(
-            """
+            '''
             CREATE TABLE IF NOT EXISTS applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 university TEXT NOT NULL,
@@ -49,7 +64,7 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
-            """
+            '''
         )
         conn.commit()
 
@@ -59,10 +74,10 @@ def initialize_database() -> None:
 def refresh_follow_up_flags() -> None:
     with get_connection() as conn:
         rows = conn.execute(
-            """
-            SELECT id, status, application_date
+            '''
+            SELECT id, status, application_date, follow_up_date
             FROM applications
-            """
+            '''
         ).fetchall()
 
         for row in rows:
@@ -70,15 +85,17 @@ def refresh_follow_up_flags() -> None:
                 calculate_follow_up_needed(
                     status=row["status"],
                     application_date=row["application_date"],
+                    follow_up_date=row["follow_up_date"],
                 )
             )
+
             conn.execute(
-                """
+                '''
                 UPDATE applications
                 SET follow_up_needed = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-                """,
+                ''',
                 (follow_up_needed, row["id"]),
             )
 
@@ -109,6 +126,7 @@ def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         calculate_follow_up_needed(
             status=validated["status"],
             application_date=validated["application_date"],
+            follow_up_date=validated["follow_up_date"],
         )
     )
 
@@ -123,7 +141,7 @@ def application_exists(
 ) -> bool:
     with get_connection() as conn:
         row = conn.execute(
-            """
+            '''
             SELECT id
             FROM applications
             WHERE university = ?
@@ -131,7 +149,7 @@ def application_exists(
               AND COALESCE(job_id, '') = COALESCE(?, '')
               AND application_date = ?
             LIMIT 1
-            """,
+            ''',
             (university, job_title, job_id, application_date),
         ).fetchone()
 
@@ -143,7 +161,7 @@ def create_application(application: Application) -> int:
 
     with get_connection() as conn:
         cursor = conn.execute(
-            """
+            '''
             INSERT INTO applications (
                 university,
                 department_lab,
@@ -160,7 +178,7 @@ def create_application(application: Application) -> int:
                 follow_up_needed
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            ''',
             (
                 payload["university"],
                 payload["department_lab"],
@@ -194,7 +212,7 @@ def create_application_if_not_exists(application: Application) -> tuple[bool, Op
 
     with get_connection() as conn:
         cursor = conn.execute(
-            """
+            '''
             INSERT INTO applications (
                 university,
                 department_lab,
@@ -211,7 +229,7 @@ def create_application_if_not_exists(application: Application) -> tuple[bool, Op
                 follow_up_needed
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            ''',
             (
                 payload["university"],
                 payload["department_lab"],
@@ -255,11 +273,11 @@ def get_application_by_id(application_id: int) -> Optional[sqlite3.Row]:
 
     with get_connection() as conn:
         row = conn.execute(
-            """
+            '''
             SELECT *
             FROM applications
             WHERE id = ?
-            """,
+            ''',
             (application_id,),
         ).fetchone()
 
@@ -271,7 +289,7 @@ def update_application(application_id: int, application: Application) -> bool:
 
     with get_connection() as conn:
         cursor = conn.execute(
-            """
+            '''
             UPDATE applications
             SET university = ?,
                 department_lab = ?,
@@ -288,7 +306,7 @@ def update_application(application_id: int, application: Application) -> bool:
                 follow_up_needed = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-            """,
+            ''',
             (
                 payload["university"],
                 payload["department_lab"],
@@ -313,10 +331,10 @@ def update_application(application_id: int, application: Application) -> bool:
 def delete_application(application_id: int) -> bool:
     with get_connection() as conn:
         cursor = conn.execute(
-            """
+            '''
             DELETE FROM applications
             WHERE id = ?
-            """,
+            ''',
             (application_id,),
         )
         conn.commit()
