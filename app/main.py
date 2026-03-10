@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import streamlit as st
 
-from app.dashboard import render_application_table, render_metrics
+from app.dashboard import (
+    render_analytics,
+    render_application_table,
+    render_follow_up_alerts,
+    render_metrics,
+    render_status_breakdown,
+)
 from app.database import (
     create_application,
     delete_application,
@@ -21,6 +29,13 @@ STATUS_OPTIONS = ["applied", "interview", "rejected", "offer"]
 FILTER_OPTIONS = ["all"] + STATUS_OPTIONS
 
 
+def parse_date_or_none(value: str):
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    return datetime.strptime(cleaned, "%Y-%m-%d").date()
+
+
 def application_from_form(
     university: str,
     department_lab: str,
@@ -32,9 +47,11 @@ def application_from_form(
     interview_stage: str,
     contact_name: str,
     contact_email: str,
-    follow_up_date,
+    follow_up_date_text: str,
     notes: str,
 ) -> Application:
+    follow_up_date = parse_date_or_none(follow_up_date_text)
+
     return Application(
         university=university,
         department_lab=department_lab,
@@ -58,7 +75,21 @@ render_metrics()
 
 st.divider()
 
-left_col, right_col = st.columns([1.2, 1.8])
+top_left, top_right = st.columns([1.1, 1.9])
+
+with top_left:
+    render_status_breakdown()
+
+with top_right:
+    render_follow_up_alerts()
+
+st.divider()
+
+render_analytics()
+
+st.divider()
+
+left_col, right_col = st.columns([1.15, 1.85])
 
 with left_col:
     st.subheader("Add Application")
@@ -74,7 +105,7 @@ with left_col:
         add_interview_stage = st.text_input("Interview Stage")
         add_contact_name = st.text_input("Contact Name")
         add_contact_email = st.text_input("Contact Email")
-        add_follow_up_date = st.date_input("Follow-Up Date", value=None)
+        add_follow_up_date_text = st.text_input("Follow-Up Date (YYYY-MM-DD)")
         add_notes = st.text_area("Notes")
 
         add_submitted = st.form_submit_button("Add Application")
@@ -92,7 +123,7 @@ with left_col:
                     interview_stage=add_interview_stage,
                     contact_name=add_contact_name,
                     contact_email=add_contact_email,
-                    follow_up_date=add_follow_up_date,
+                    follow_up_date_text=add_follow_up_date_text,
                     notes=add_notes,
                 )
                 new_id = create_application(new_application)
@@ -121,13 +152,18 @@ with right_col:
         selected_row = get_application_by_id(selected_id)
 
         if selected_row:
+            existing_follow_up_date = selected_row["follow_up_date"] or ""
+
             with st.form("edit_application_form"):
                 edit_university = st.text_input("University *", value=selected_row["university"])
                 edit_department_lab = st.text_input("Department / Lab *", value=selected_row["department_lab"])
                 edit_job_title = st.text_input("Job Title *", value=selected_row["job_title"])
                 edit_job_id = st.text_input("Job ID", value=selected_row["job_id"] or "")
                 edit_location = st.text_input("Location", value=selected_row["location"] or "")
-                edit_application_date = st.date_input("Application Date *", value=selected_row["application_date"])
+                edit_application_date = st.date_input(
+                    "Application Date *",
+                    value=datetime.strptime(selected_row["application_date"], "%Y-%m-%d").date(),
+                )
                 edit_status = st.selectbox(
                     "Status *",
                     STATUS_OPTIONS,
@@ -136,9 +172,9 @@ with right_col:
                 edit_interview_stage = st.text_input("Interview Stage", value=selected_row["interview_stage"] or "")
                 edit_contact_name = st.text_input("Contact Name", value=selected_row["contact_name"] or "")
                 edit_contact_email = st.text_input("Contact Email", value=selected_row["contact_email"] or "")
-                edit_follow_up_date = st.date_input(
-                    "Follow-Up Date",
-                    value=selected_row["follow_up_date"],
+                edit_follow_up_date_text = st.text_input(
+                    "Follow-Up Date (YYYY-MM-DD)",
+                    value=existing_follow_up_date,
                 )
                 edit_notes = st.text_area("Notes", value=selected_row["notes"] or "")
 
@@ -158,7 +194,7 @@ with right_col:
                             interview_stage=edit_interview_stage,
                             contact_name=edit_contact_name,
                             contact_email=edit_contact_email,
-                            follow_up_date=edit_follow_up_date,
+                            follow_up_date_text=edit_follow_up_date_text,
                             notes=edit_notes,
                         )
                         updated = update_application(selected_id, updated_application)

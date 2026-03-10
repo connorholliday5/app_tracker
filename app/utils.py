@@ -10,8 +10,16 @@ DATE_FORMAT = "%Y-%m-%d"
 def normalize_text(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
+
     cleaned = str(value).strip()
-    return cleaned if cleaned else None
+
+    if not cleaned:
+        return None
+
+    if cleaned.lower() in {"nan", "none", "nat"}:
+        return None
+
+    return cleaned
 
 
 def normalize_required_text(value: str, field_name: str) -> str:
