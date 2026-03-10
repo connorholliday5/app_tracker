@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -137,26 +138,41 @@ def get_export_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-def generate_follow_up_email(row) -> str:
+def generate_follow_up_email(row) -> tuple[str, str]:
     contact_name = (row["contact_name"] or "").strip()
     greeting_name = contact_name if contact_name else "Hiring Team"
     university = row["university"]
     job_title = row["job_title"]
     application_date = row["application_date"]
 
-    return f"""Subject: Follow-Up on {job_title} Application
+    subject = f"Follow-Up on {job_title} Application"
 
-Dear {greeting_name},
+    body = f"""Dear {greeting_name},
 
 I hope you are doing well. I wanted to follow up on my application for the {job_title} position at {university}, which I submitted on {application_date}.
 
-I remain very interested in this opportunity and genuinely excited about the chance to contribute. The position strongly stands out to me because of how closely it aligns with my background and the kind of work I am hoping to grow in.
+I remain very interested in this opportunity and genuinely excited about the chance to contribute. The position stands out to me because of how closely it aligns with my background, my interests, and the kind of work I am hoping to grow in.
 
 I would be grateful for any update you may be able to share regarding the status of my application. Thank you again for your time and consideration.
 
 Best,
 Connor Holliday
+connholl@bu.edu
 """
+    return subject, body
+
+
+def build_gmail_draft_url(to_email: str | None, subject: str, body: str) -> str:
+    recipient = to_email or ""
+    base_url = "https://mail.google.com/mail/?view=cm&fs=1"
+    return (
+        f"{base_url}"
+        f"&to={quote(recipient)}"
+        f"&su={quote(subject)}"
+        f"&body={quote(body)}"
+    )
+
+
 st.title("grad-app-tracker")
 st.caption("Graduate school and research application tracker")
 
@@ -289,8 +305,26 @@ else:
     selected_email_row = get_application_by_id(selected_email_id)
 
     if selected_email_row:
-        email_draft = generate_follow_up_email(selected_email_row)
-        st.text_area("Generated Follow-Up Email", value=email_draft, height=280)
+        subject, body = generate_follow_up_email(selected_email_row)
+        email_draft = f"Subject: {subject}\n\n{body}"
+        gmail_url = build_gmail_draft_url(
+            selected_email_row["contact_email"],
+            subject,
+            body,
+        )
+
+        st.text_area("Generated Follow-Up Email", value=email_draft, height=320)
+
+        email_action_col1, email_action_col2 = st.columns(2)
+
+        with email_action_col1:
+            st.link_button("Open Gmail Draft", gmail_url, use_container_width=True)
+
+        with email_action_col2:
+            if selected_email_row["contact_email"]:
+                st.caption(f"Recipient: {selected_email_row['contact_email']}")
+            else:
+                st.caption("Recipient: no contact email saved for this application")
 
 st.divider()
 
