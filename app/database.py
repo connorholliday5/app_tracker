@@ -115,6 +115,29 @@ def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return validated
 
 
+def application_exists(
+    university: str,
+    job_title: str,
+    job_id: Optional[str],
+    application_date: str,
+) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM applications
+            WHERE university = ?
+              AND job_title = ?
+              AND COALESCE(job_id, '') = COALESCE(?, '')
+              AND application_date = ?
+            LIMIT 1
+            """,
+            (university, job_title, job_id, application_date),
+        ).fetchone()
+
+    return row is not None
+
+
 def create_application(application: Application) -> int:
     payload = validate_application_payload(application.__dict__)
 
@@ -156,6 +179,57 @@ def create_application(application: Application) -> int:
         )
         conn.commit()
         return int(cursor.lastrowid)
+
+
+def create_application_if_not_exists(application: Application) -> tuple[bool, Optional[int]]:
+    payload = validate_application_payload(application.__dict__)
+
+    if application_exists(
+        university=payload["university"],
+        job_title=payload["job_title"],
+        job_id=payload["job_id"],
+        application_date=payload["application_date"],
+    ):
+        return False, None
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO applications (
+                university,
+                department_lab,
+                job_title,
+                job_id,
+                location,
+                application_date,
+                status,
+                interview_stage,
+                contact_name,
+                contact_email,
+                follow_up_date,
+                notes,
+                follow_up_needed
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload["university"],
+                payload["department_lab"],
+                payload["job_title"],
+                payload["job_id"],
+                payload["location"],
+                payload["application_date"],
+                payload["status"],
+                payload["interview_stage"],
+                payload["contact_name"],
+                payload["contact_email"],
+                payload["follow_up_date"],
+                payload["notes"],
+                payload["follow_up_needed"],
+            ),
+        )
+        conn.commit()
+        return True, int(cursor.lastrowid)
 
 
 def get_all_applications(status: Optional[str] = None) -> List[sqlite3.Row]:

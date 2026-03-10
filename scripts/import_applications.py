@@ -1,7 +1,7 @@
 import sys
 import pandas as pd
 
-from app.database import create_application, initialize_database
+from app.database import create_application_if_not_exists, initialize_database
 from app.models import Application
 
 
@@ -64,27 +64,37 @@ def main():
             df[column] = None
 
     inserted = 0
+    skipped = 0
 
-    for _, row in df.iterrows():
-        app = Application(
-            university=clean_value(row.get("university")) or "",
-            department_lab=clean_value(row.get("department_lab")) or "",
-            job_title=clean_value(row.get("job_title")) or "",
-            job_id=clean_value(row.get("job_id")),
-            location=clean_value(row.get("location")),
-            application_date=clean_value(row.get("application_date")) or "",
-            status=clean_value(row.get("status")) or "",
-            interview_stage=clean_value(row.get("interview_stage")),
-            contact_name=clean_value(row.get("contact_name")),
-            contact_email=clean_value(row.get("contact_email")),
-            follow_up_date=clean_value(row.get("follow_up_date")),
-            notes=clean_value(row.get("notes")),
-        )
+    for row_number, (_, row) in enumerate(df.iterrows(), start=2):
+        try:
+            app = Application(
+                university=clean_value(row.get("university")) or "",
+                department_lab=clean_value(row.get("department_lab")) or "",
+                job_title=clean_value(row.get("job_title")) or "",
+                job_id=clean_value(row.get("job_id")),
+                location=clean_value(row.get("location")),
+                application_date=clean_value(row.get("application_date")) or "",
+                status=clean_value(row.get("status")) or "",
+                interview_stage=clean_value(row.get("interview_stage")),
+                contact_name=clean_value(row.get("contact_name")),
+                contact_email=clean_value(row.get("contact_email")),
+                follow_up_date=clean_value(row.get("follow_up_date")),
+                notes=clean_value(row.get("notes")),
+            )
 
-        create_application(app)
-        inserted += 1
+            created, _ = create_application_if_not_exists(app)
+
+            if created:
+                inserted += 1
+            else:
+                skipped += 1
+
+        except Exception as exc:
+            raise ValueError(f"Import failed on CSV row {row_number}: {exc}") from exc
 
     print(f"Imported {inserted} applications successfully")
+    print(f"Skipped {skipped} duplicate applications")
 
 
 if __name__ == "__main__":

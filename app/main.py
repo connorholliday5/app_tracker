@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 
+import pandas as pd
 import streamlit as st
 
 from app.dashboard import (
@@ -13,6 +15,7 @@ from app.dashboard import (
 )
 from app.database import (
     create_application,
+    create_application_if_not_exists,
     delete_application,
     get_all_applications,
     get_application_by_id,
@@ -27,6 +30,20 @@ initialize_database()
 
 STATUS_OPTIONS = ["applied", "interview", "rejected", "offer"]
 FILTER_OPTIONS = ["all"] + STATUS_OPTIONS
+TEMPLATE_COLUMNS = [
+    "university",
+    "department_lab",
+    "job_title",
+    "job_id",
+    "location",
+    "application_date",
+    "status",
+    "interview_stage",
+    "contact_name",
+    "contact_email",
+    "follow_up_date",
+    "notes",
+]
 
 
 def parse_date_or_none(value: str):
@@ -34,6 +51,21 @@ def parse_date_or_none(value: str):
     if not cleaned:
         return None
     return datetime.strptime(cleaned, "%Y-%m-%d").date()
+
+
+def clean_value(value):
+    if pd.isna(value):
+        return None
+
+    cleaned = str(value).strip()
+
+    if cleaned == "":
+        return None
+
+    if cleaned.lower() in {"nan", "none", "nat"}:
+        return None
+
+    return cleaned
 
 
 def application_from_form(
@@ -68,6 +100,42 @@ def application_from_form(
     )
 
 
+def application_from_series(row: pd.Series) -> Application:
+    return Application(
+        university=clean_value(row.get("university")) or "",
+        department_lab=clean_value(row.get("department_lab")) or "",
+        job_title=clean_value(row.get("job_title")) or "",
+        job_id=clean_value(row.get("job_id")),
+        location=clean_value(row.get("location")),
+        application_date=clean_value(row.get("application_date")) or "",
+        status=clean_value(row.get("status")) or "",
+        interview_stage=clean_value(row.get("interview_stage")),
+        contact_name=clean_value(row.get("contact_name")),
+        contact_email=clean_value(row.get("contact_email")),
+        follow_up_date=clean_value(row.get("follow_up_date")),
+        notes=clean_value(row.get("notes")),
+    )
+
+
+def get_template_csv_bytes() -> bytes:
+    template_df = pd.DataFrame(columns=TEMPLATE_COLUMNS)
+    return template_df.to_csv(index=False).encode("utf-8")
+
+
+def get_export_dataframe() -> pd.DataFrame:
+    rows = get_all_applications()
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame([dict(row) for row in rows])
+
+
+def get_export_excel_bytes(df: pd.DataFrame) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="applications")
+    return output.getvalue()
+
+
 st.title("grad-app-tracker")
 st.caption("Graduate school and research application tracker")
 
@@ -86,6 +154,92 @@ with top_right:
 st.divider()
 
 render_analytics()
+
+st.divider()
+
+st.subheader("Import / Export")
+
+import_col, export_col = st.columns(2)
+
+with import_col:
+    st.markdown("### CSV Import")
+    st.download_button(
+        label="Download CSV Template",
+        data=get_template_csv_bytes(),
+        file_name="grad_app_tracker_template.csv",
+        mime="text/csv",
+    )
+
+    uploaded_file = st.file_uploader("Upload Applications CSV", type="csv")
+
+    if uploaded_file is not None:
+        try:
+            preview_df = pd.read_csv(uploaded_file)
+            st.markdown("**Preview**")
+            st.dataframe(preview_df, width="stretch", hide_index=True)
+
+            if st.button("Import Uploaded CSV"):
+                required_columns = [
+                    "university",
+                    "department_lab",
+                    "job_title",
+                    "application_date",
+                    "status",
+                ]
+
+                missing = [column for column in required_columns if column not in preview_df.columns]
+                if missing:
+                    st.error(f"Missing required columns: {missing}")
+                else:
+                    for column in TEMPLATE_COLUMNS:
+                        if column not in preview_df.columns:
+                            preview_df[column] = None
+
+                    inserted = 0
+                    skipped = 0
+
+                    for row_number, (_, row) in enumerate(preview_df.iterrows(), start=2):
+                        try:
+                            app = application_from_series(row)
+                            created, _ = create_application_if_not_exists(app)
+                            if created:
+                                inserted += 1
+                            else:
+                                skipped += 1
+                        except Exception as exc:
+                            st.error(f"Import failed on CSV row {row_number}: {exc}")
+                            st.stop()
+
+                    st.success(f"Imported {inserted} applications successfully.")
+                    st.info(f"Skipped {skipped} duplicate applications.")
+                    st.rerun()
+        except Exception as exc:
+            st.error(f"Unable to read uploaded CSV: {exc}")
+
+with export_col:
+    st.markdown("### Data Export")
+
+    export_df = get_export_dataframe()
+
+    if export_df.empty:
+        st.info("No application data available to export.")
+    else:
+        csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        excel_bytes = get_export_excel_bytes(export_df)
+
+        st.download_button(
+            label="Download CSV Export",
+            data=csv_bytes,
+            file_name="grad_app_tracker_export.csv",
+            mime="text/csv",
+        )
+
+        st.download_button(
+            label="Download Excel Export",
+            data=excel_bytes,
+            file_name="grad_app_tracker_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 st.divider()
 
