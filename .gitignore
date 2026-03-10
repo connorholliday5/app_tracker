@@ -9,8 +9,11 @@ __pycache__/
 venv/
 .venv/
 
+.streamlit/secrets.toml
+
 exports/*.csv
 exports/*.xlsx
+temp.xlsx
 
 .DS_Store
 .vscode/
