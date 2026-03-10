@@ -1,0 +1,12 @@
+services:
+  grad-app-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grad-app-tracker
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: streamlit run app/main.py --server.address=0.0.0.0 --server.port=8501
