@@ -8,6 +8,15 @@ Career Application Tracker helps replace a messy application process spread acro
 
 ---
 
+
+---
+
+## Dashboard Preview
+
+![Career Application Tracker Dashboard](images/dashboard.png)
+
+---
+
 ## Overview
 
 Career Application Tracker is a small full-stack data application built with:
@@ -243,6 +252,7 @@ Connor Holliday
 
 GitHub:
 https://github.com/connorholliday5/app_tracker
+
 
 
 
