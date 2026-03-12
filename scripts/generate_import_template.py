@@ -2,12 +2,14 @@ import pandas as pd
 
 columns = [
     "university",
+    "company",
     "department_lab",
     "job_title",
     "job_id",
     "location",
     "application_date",
     "status",
+    "job_type",
     "interview_stage",
     "contact_name",
     "contact_email",

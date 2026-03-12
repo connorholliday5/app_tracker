@@ -16,5 +16,7 @@ class Application:
     contact_email: Optional[str]
     follow_up_date: Optional[str]
     notes: Optional[str]
+    company: Optional[str] = None
+    job_type: Optional[str] = None
     follow_up_needed: bool = False
     id: Optional[int] = None

@@ -6,8 +6,6 @@ from app.models import Application
 
 
 REQUIRED_COLUMNS = [
-    "university",
-    "department_lab",
     "job_title",
     "application_date",
     "status",
@@ -15,12 +13,14 @@ REQUIRED_COLUMNS = [
 
 ALL_COLUMNS = [
     "university",
+    "company",
     "department_lab",
     "job_title",
     "job_id",
     "location",
     "application_date",
     "status",
+    "job_type",
     "interview_stage",
     "contact_name",
     "contact_email",
@@ -59,6 +59,9 @@ def main():
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
+    if "university" not in df.columns and "company" not in df.columns:
+        raise ValueError("CSV must include at least one of: university or company")
+
     for column in ALL_COLUMNS:
         if column not in df.columns:
             df[column] = None
@@ -68,14 +71,18 @@ def main():
 
     for row_number, (_, row) in enumerate(df.iterrows(), start=2):
         try:
+            organization_value = clean_value(row.get("university")) or clean_value(row.get("company")) or ""
+
             app = Application(
-                university=clean_value(row.get("university")) or "",
+                university=organization_value,
+                company=clean_value(row.get("company")),
                 department_lab=clean_value(row.get("department_lab")) or "",
                 job_title=clean_value(row.get("job_title")) or "",
                 job_id=clean_value(row.get("job_id")),
                 location=clean_value(row.get("location")),
                 application_date=clean_value(row.get("application_date")) or "",
                 status=clean_value(row.get("status")) or "",
+                job_type=clean_value(row.get("job_type")),
                 interview_stage=clean_value(row.get("interview_stage")),
                 contact_name=clean_value(row.get("contact_name")),
                 contact_email=clean_value(row.get("contact_email")),

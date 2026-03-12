@@ -42,6 +42,17 @@ def calculate_follow_up_needed(status: str, application_date: str, follow_up_dat
     return days_since_application >= 14
 
 
+def _get_existing_columns(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("PRAGMA table_info(applications)").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _ensure_column(conn: sqlite3.Connection, column_name: str, column_sql: str) -> None:
+    existing_columns = _get_existing_columns(conn)
+    if column_name not in existing_columns:
+        conn.execute(f"ALTER TABLE applications ADD COLUMN {column_name} {column_sql}")
+
+
 def initialize_database() -> None:
     with get_connection() as conn:
         conn.execute(
@@ -66,6 +77,10 @@ def initialize_database() -> None:
             )
             '''
         )
+
+        _ensure_column(conn, "company", "TEXT")
+        _ensure_column(conn, "job_type", "TEXT")
+
         conn.commit()
 
     refresh_follow_up_flags()
@@ -102,10 +117,26 @@ def refresh_follow_up_flags() -> None:
         conn.commit()
 
 
+def _normalize_primary_organization(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    university_value = normalize_text(payload.get("university"))
+    company_value = normalize_text(payload.get("company"))
+
+    if university_value:
+        return university_value, company_value
+
+    if company_value:
+        return company_value, company_value
+
+    raise ValueError("organization or company is required.")
+
+
 def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_university, normalized_company = _normalize_primary_organization(payload)
+
     validated = {
-        "university": normalize_required_text(payload.get("university"), "university"),
-        "department_lab": normalize_required_text(payload.get("department_lab"), "department_lab"),
+        "university": normalized_university,
+        "company": normalized_company,
+        "department_lab": normalize_text(payload.get("department_lab")) or "",
         "job_title": normalize_required_text(payload.get("job_title"), "job_title"),
         "job_id": normalize_text(payload.get("job_id")),
         "location": normalize_text(payload.get("location")),
@@ -113,6 +144,7 @@ def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             parse_iso_date(payload.get("application_date"), "application_date", required=True)
         ),
         "status": normalize_status(payload.get("status")),
+        "job_type": normalize_text(payload.get("job_type")),
         "interview_stage": normalize_text(payload.get("interview_stage")),
         "contact_name": normalize_text(payload.get("contact_name")),
         "contact_email": normalize_text(payload.get("contact_email")),
@@ -164,12 +196,14 @@ def create_application(application: Application) -> int:
             '''
             INSERT INTO applications (
                 university,
+                company,
                 department_lab,
                 job_title,
                 job_id,
                 location,
                 application_date,
                 status,
+                job_type,
                 interview_stage,
                 contact_name,
                 contact_email,
@@ -177,16 +211,18 @@ def create_application(application: Application) -> int:
                 notes,
                 follow_up_needed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 payload["university"],
+                payload["company"],
                 payload["department_lab"],
                 payload["job_title"],
                 payload["job_id"],
                 payload["location"],
                 payload["application_date"],
                 payload["status"],
+                payload["job_type"],
                 payload["interview_stage"],
                 payload["contact_name"],
                 payload["contact_email"],
@@ -215,12 +251,14 @@ def create_application_if_not_exists(application: Application) -> tuple[bool, Op
             '''
             INSERT INTO applications (
                 university,
+                company,
                 department_lab,
                 job_title,
                 job_id,
                 location,
                 application_date,
                 status,
+                job_type,
                 interview_stage,
                 contact_name,
                 contact_email,
@@ -228,16 +266,18 @@ def create_application_if_not_exists(application: Application) -> tuple[bool, Op
                 notes,
                 follow_up_needed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 payload["university"],
+                payload["company"],
                 payload["department_lab"],
                 payload["job_title"],
                 payload["job_id"],
                 payload["location"],
                 payload["application_date"],
                 payload["status"],
+                payload["job_type"],
                 payload["interview_stage"],
                 payload["contact_name"],
                 payload["contact_email"],
@@ -292,12 +332,14 @@ def update_application(application_id: int, application: Application) -> bool:
             '''
             UPDATE applications
             SET university = ?,
+                company = ?,
                 department_lab = ?,
                 job_title = ?,
                 job_id = ?,
                 location = ?,
                 application_date = ?,
                 status = ?,
+                job_type = ?,
                 interview_stage = ?,
                 contact_name = ?,
                 contact_email = ?,
@@ -309,12 +351,14 @@ def update_application(application_id: int, application: Application) -> bool:
             ''',
             (
                 payload["university"],
+                payload["company"],
                 payload["department_lab"],
                 payload["job_title"],
                 payload["job_id"],
                 payload["location"],
                 payload["application_date"],
                 payload["status"],
+                payload["job_type"],
                 payload["interview_stage"],
                 payload["contact_name"],
                 payload["contact_email"],
