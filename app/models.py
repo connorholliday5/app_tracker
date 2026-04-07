@@ -4,7 +4,7 @@ from typing import Optional
 
 @dataclass
 class Application:
-    university: str
+    organization: str
     department_lab: str
     job_title: str
     job_id: Optional[str]

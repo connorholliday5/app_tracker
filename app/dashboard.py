@@ -6,26 +6,49 @@ import streamlit as st
 from app.database import get_all_applications, get_dashboard_metrics
 
 
-DISPLAY_COLUMNS = [
-    "id",
-    "university",
-    "company",
-    "department_lab",
-    "job_title",
-    "job_id",
-    "location",
-    "application_date",
-    "status",
-    "job_type",
-    "interview_stage",
-    "contact_name",
-    "contact_email",
-    "follow_up_date",
-    "follow_up_needed",
-    "notes",
+STATUS_CONFIG = {
+    "applied":    {"emoji": "🔵", "label": "Applied"},
+    "interview":  {"emoji": "🟢", "label": "Interview"},
+    "offer":      {"emoji": "⭐", "label": "Offer"},
+    "rejected":   {"emoji": "🔴", "label": "Rejected"},
+    "withdrawn":  {"emoji": "⚪", "label": "Withdrawn"},
+    "ghosted":    {"emoji": "👻", "label": "Ghosted"},
+    "waitlisted": {"emoji": "🟠", "label": "Waitlisted"},
+}
+
+PIPELINE_COLUMNS = [
+    "id", "organization", "job_title", "status_badge",
+    "application_date", "location", "job_type", "interview_stage", "follow_up_needed",
+]
+
+ALL_COLUMNS = [
+    "id", "organization", "company", "department_lab", "job_title", "job_id",
+    "location", "application_date", "status", "job_type", "interview_stage",
+    "contact_name", "contact_email", "follow_up_date", "follow_up_needed", "notes",
 ]
 
 
+def _fmt_date(val) -> str:
+    s = str(val).strip()
+    if not s or s in {"None", "nan", "NaT"}:
+        return "—"
+    try:
+        return pd.to_datetime(s).strftime("%b %d, %Y")
+    except Exception:
+        return s
+
+
+def _fmt_text(val) -> str:
+    s = str(val).strip() if val is not None else ""
+    return "—" if not s or s in {"None", "nan"} else s
+
+
+def _status_badge(status: str) -> str:
+    cfg = STATUS_CONFIG.get(str(status).lower(), {"emoji": "⬜", "label": status.title()})
+    return f"{cfg['emoji']} {cfg['label']}"
+
+
+@st.cache_data(ttl=300)
 def _get_all_df() -> pd.DataFrame:
     applications = get_all_applications()
     if not applications:
@@ -33,7 +56,7 @@ def _get_all_df() -> pd.DataFrame:
     return pd.DataFrame([dict(row) for row in applications])
 
 
-def _build_dataframe(status_filter: str, search_text: str = "") -> pd.DataFrame:
+def _build_pipeline_df(status_filter: str, search_text: str = "") -> pd.DataFrame:
     applications = (
         get_all_applications()
         if status_filter == "all"
@@ -45,323 +68,210 @@ def _build_dataframe(status_filter: str, search_text: str = "") -> pd.DataFrame:
 
     df = pd.DataFrame([dict(row) for row in applications])
 
-    for column in DISPLAY_COLUMNS:
-        if column not in df.columns:
-            df[column] = None
-
     if search_text.strip():
-        search_value = search_text.strip().lower()
-        search_columns = [
-            "university",
-            "company",
-            "department_lab",
-            "job_title",
-            "notes",
-            "contact_name",
-            "contact_email",
-            "location",
-            "job_id",
-            "job_type",
-        ]
-
-        combined_search = df[search_columns].fillna("").astype(str).agg(" | ".join, axis=1).str.lower()
-        df = df[combined_search.str.contains(search_value, na=False)]
+        q = search_text.strip().lower()
+        cols = ["organization", "company", "job_title", "notes", "contact_name", "location", "job_id", "job_type"]
+        mask = df[cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower().str.contains(q)
+        df = df[mask]
 
     if df.empty:
         return pd.DataFrame()
 
-    df = df[DISPLAY_COLUMNS].copy()
+    df["status_badge"] = df["status"].apply(_status_badge)
+    df["application_date"] = df["application_date"].apply(_fmt_date)
+    df["follow_up_needed"] = df["follow_up_needed"].apply(lambda v: "⚠️ Yes" if int(v) == 1 else "—")
 
-    df["follow_up_needed"] = df["follow_up_needed"].apply(
-        lambda value: "Yes" if int(value) == 1 else "No"
-    )
+    for col in ["location", "job_type", "interview_stage", "organization", "job_title"]:
+        df[col] = df[col].apply(_fmt_text)
 
-    df = df.rename(
-        columns={
-            "id": "ID",
-            "university": "Organization",
-            "company": "Company",
-            "department_lab": "Team / Department / Lab",
-            "job_title": "Role Title",
-            "job_id": "Job ID",
-            "location": "Location",
-            "application_date": "Application Date",
-            "status": "Status",
-            "job_type": "Job Type",
-            "interview_stage": "Interview Stage",
-            "contact_name": "Contact Name",
-            "contact_email": "Contact Email",
-            "follow_up_date": "Follow-Up Date",
-            "follow_up_needed": "Follow-Up Needed",
-            "notes": "Notes",
-        }
-    )
-
-    return df
-
-
-def _organization_counts(df: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df["university"]
-        .fillna("Unknown")
-        .replace("", "Unknown")
-        .value_counts()
-        .rename_axis("Organization")
-        .reset_index(name="Applications")
-    )
-
-
-def _status_counts(df: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df["status"]
-        .fillna("Unknown")
-        .replace("", "Unknown")
-        .value_counts()
-        .rename_axis("Status")
-        .reset_index(name="Count")
-    )
-
-
-def _job_type_counts(df: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df["job_type"]
-        .fillna("Unspecified")
-        .replace("", "Unspecified")
-        .value_counts()
-        .rename_axis("Job Type")
-        .reset_index(name="Applications")
-    )
-
-
-def _outcome_counts(df: pd.DataFrame) -> pd.DataFrame:
-    outcome_df = df.copy()
-    outcome_df["outcome_bucket"] = outcome_df["status"].map(
-        {
-            "applied": "Active",
-            "interview": "In Process",
-            "rejected": "Closed - Rejected",
-            "offer": "Closed - Offer",
-        }
-    ).fillna("Other")
-
-    return (
-        outcome_df["outcome_bucket"]
-        .value_counts()
-        .rename_axis("Outcome")
-        .reset_index(name="Applications")
-    )
-
-
-def _company_counts(df: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df["company"]
-        .fillna("Unspecified")
-        .replace("", "Unspecified")
-        .value_counts()
-        .rename_axis("Company")
-        .reset_index(name="Applications")
-    )
-
-
-def _funnel_df(df: pd.DataFrame) -> pd.DataFrame:
-    applied_count = int((df["status"] == "applied").sum())
-    interview_count = int((df["status"] == "interview").sum())
-    offer_count = int((df["status"] == "offer").sum())
-
-    return pd.DataFrame(
-        [
-            {"Stage": "Applied", "Count": applied_count},
-            {"Stage": "Interview", "Count": interview_count},
-            {"Stage": "Offer", "Count": offer_count},
-        ]
-    )
-
-
-def _timeline_counts(df: pd.DataFrame) -> pd.DataFrame:
-    timeline_df = df.copy()
-    timeline_df["application_date"] = pd.to_datetime(
-        timeline_df["application_date"],
-        errors="coerce"
-    )
-    timeline_df = timeline_df.dropna(subset=["application_date"])
-
-    if timeline_df.empty:
-        return pd.DataFrame()
-
-    timeline_df["application_week"] = timeline_df["application_date"].dt.to_period("W").astype(str)
-
-    return (
-        timeline_df["application_week"]
-        .value_counts()
-        .sort_index()
-        .rename_axis("Application Week")
-        .reset_index(name="Applications")
-    )
+    available = [c for c in PIPELINE_COLUMNS if c in df.columns]
+    return df[available].rename(columns={
+        "id": "ID",
+        "organization": "Organization",
+        "job_title": "Role",
+        "status_badge": "Status",
+        "application_date": "Applied",
+        "location": "Location",
+        "job_type": "Type",
+        "interview_stage": "Stage",
+        "follow_up_needed": "Follow-Up",
+    })
 
 
 def render_metrics() -> None:
     metrics = get_dashboard_metrics()
     df = _get_all_df()
-
-    if df.empty:
-        active_applications = 0
-        offers = 0
-    else:
-        active_applications = int(df["status"].isin(["applied", "interview"]).sum())
+    active = 0
+    offers = 0
+    if not df.empty:
+        active = int(df["status"].isin(["applied", "interview", "waitlisted"]).sum())
         offers = int((df["status"] == "offer").sum())
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Total Applications", metrics["total_applications"])
-    col2.metric("Active Applications", active_applications)
-    col3.metric("Interviews", metrics["interviews"])
-    col4.metric("Offers", offers)
-    col5.metric("Follow-Ups Needed", metrics["follow_ups_needed"])
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Applications", metrics["total_applications"])
+    c2.metric("Active", active)
+    c3.metric("Interviews", metrics["interviews"])
+    c4.metric("Offers", offers)
+    c5.metric("Follow-Ups Needed", metrics["follow_ups_needed"])
 
 
 def render_job_search_stats() -> None:
-    st.subheader("Pipeline Snapshot")
-
+    st.subheader('Pipeline Snapshot')
     df = _get_all_df()
-
     if df.empty:
-        st.info("No application data available for pipeline stats yet.")
+        st.info("No application data yet.")
         return
 
     total = len(df)
     interviews = int((df["status"] == "interview").sum())
     rejections = int((df["status"] == "rejected").sum())
     offers = int((df["status"] == "offer").sum())
-    active_responses = interviews + rejections + offers
-
-    response_rate = round((active_responses / total) * 100, 1) if total else 0.0
+    response_rate = round(((interviews + rejections + offers) / total) * 100, 1) if total else 0.0
     interview_rate = round((interviews / total) * 100, 1) if total else 0.0
     offer_rate = round((offers / total) * 100, 1) if total else 0.0
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Response Rate", f"{response_rate}%")
-    col2.metric("Interview Rate", f"{interview_rate}%")
-    col3.metric("Offer Rate", f"{offer_rate}%")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Response Rate", f"{response_rate}%")
+    c2.metric("Interview Rate", f"{interview_rate}%")
+    c3.metric("Offer Rate", f"{offer_rate}%")
 
 
 def render_status_breakdown() -> None:
     st.subheader("Status Breakdown")
-
     df = _get_all_df()
-
     if df.empty:
-        st.info("No application data available yet.")
+        st.info("No data yet.")
         return
 
-    status_counts = _status_counts(df)
-    st.dataframe(status_counts, width="stretch", hide_index=True)
+    counts = df["status"].value_counts().to_dict()
+
+    st.caption("Active")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔵 Applied",    counts.get("applied", 0))
+    c2.metric("🟢 Interview",  counts.get("interview", 0))
+    c3.metric("🟠 Waitlist",   counts.get("waitlisted", 0))
+    c4.metric("⭐ Offer",      counts.get("offer", 0))
+
+    st.caption("Closed")
+    d1, d2, d3 = st.columns(3)
+    d1.metric("🔴 Rejected",   counts.get("rejected", 0))
+    d2.metric("⚪ Withdrawn",  counts.get("withdrawn", 0))
+    d3.metric("👻 Ghosted",    counts.get("ghosted", 0))
 
 
 def render_follow_up_alerts() -> None:
     st.subheader("Follow-Up Queue")
-
     df = _get_all_df()
-
     if df.empty:
-        st.info("No applications available yet.")
+        st.info("No applications yet.")
         return
 
     follow_up_df = df[df["follow_up_needed"] == 1].copy()
-
     if follow_up_df.empty:
-        st.success("No follow-ups are currently needed.")
+        st.success("No follow-ups needed right now.")
         return
 
-    follow_up_df["application_date"] = pd.to_datetime(
-        follow_up_df["application_date"],
-        errors="coerce"
+    follow_up_df["application_date"] = pd.to_datetime(follow_up_df["application_date"], errors="coerce")
+    follow_up_df["follow_up_date"] = pd.to_datetime(follow_up_df["follow_up_date"], errors="coerce")
+    follow_up_df["reference_date"] = follow_up_df["follow_up_date"].fillna(follow_up_df["application_date"])
+    follow_up_df["days_waiting"] = (pd.Timestamp.today().normalize() - follow_up_df["reference_date"]).dt.days
+    follow_up_df["application_date"] = follow_up_df["application_date"].apply(
+        lambda v: v.strftime("%b %d, %Y") if pd.notna(v) else "—"
     )
-    follow_up_df["days_waiting"] = (
-        pd.Timestamp.today().normalize() - follow_up_df["application_date"]
-    ).dt.days
+    follow_up_df["contact_email"] = follow_up_df["contact_email"].apply(_fmt_text)
 
-    follow_up_df = follow_up_df[
-        [
-            "university",
-            "job_title",
-            "application_date",
-            "days_waiting",
-            "contact_email",
-        ]
-    ].rename(
-        columns={
-            "university": "Organization",
-            "job_title": "Role Title",
-            "application_date": "Applied On",
-            "days_waiting": "Days Waiting",
-            "contact_email": "Contact Email",
-        }
+    display = follow_up_df[["organization", "job_title", "application_date", "days_waiting", "contact_email"]].rename(columns={
+        "organization": "Organization",
+        "job_title": "Role",
+        "application_date": "Applied",
+        "days_waiting": "Days Waiting",
+        "contact_email": "Contact",
+    })
+
+    st.warning(f"{len(display)} application(s) ready for follow-up.")
+    st.dataframe(display, hide_index=True, width='stretch')
+
+
+def _timeline_counts(df: pd.DataFrame) -> pd.DataFrame:
+    t = df.copy()
+    t["application_date"] = pd.to_datetime(t["application_date"], errors="coerce")
+    t = t.dropna(subset=["application_date"])
+    if t.empty:
+        return pd.DataFrame()
+    t["week"] = t["application_date"].dt.to_period("W").astype(str)
+    return t["week"].value_counts().sort_index().rename_axis("Week").reset_index(name="Applications")
+
+
+def _org_counts(df: pd.DataFrame) -> pd.DataFrame:
+    return (
+        df["organization"].fillna("Unknown").replace("", "Unknown")
+        .value_counts().rename_axis("Organization").reset_index(name="Applications")
     )
 
-    st.warning("These applications are ready for follow-up.")
-    st.dataframe(follow_up_df, width="stretch", hide_index=True)
+
+def _status_counts(df: pd.DataFrame) -> pd.DataFrame:
+    return (
+        df["status"].fillna("Unknown").replace("", "Unknown")
+        .value_counts().rename_axis("Status").reset_index(name="Count")
+    )
+
+
+def _job_type_counts(df: pd.DataFrame) -> pd.DataFrame:
+    return (
+        df["job_type"].fillna("Unspecified").replace("", "Unspecified")
+        .value_counts().rename_axis("Job Type").reset_index(name="Applications")
+    )
 
 
 def render_analytics() -> None:
-    st.subheader("Core Analytics")
-
+    st.subheader("Analytics")
     df = _get_all_df()
-
     if df.empty:
-        st.info("No application data available for analytics yet.")
+        st.info("No data yet.")
         return
 
-    timeline_counts = _timeline_counts(df)
-    if timeline_counts.empty:
-        st.info("No valid application dates available for the timeline chart.")
-    else:
+    timeline = _timeline_counts(df)
+    if not timeline.empty:
         st.markdown("**Applications Over Time**")
-        st.line_chart(timeline_counts.set_index("Application Week"), width="stretch")
+        st.line_chart(timeline.set_index("Week"), width='stretch')
 
     st.markdown("**Applications by Organization**")
-    organization_counts = _organization_counts(df)
-    st.bar_chart(organization_counts.set_index("Organization"), width="stretch")
+    st.bar_chart(_org_counts(df).set_index("Organization"), width='stretch')
 
     with st.expander("More Analytics", expanded=False):
-        top_left, top_right = st.columns(2)
-
-        with top_left:
-            st.markdown("**Applications by Status**")
-            status_counts = _status_counts(df).rename(columns={"Count": "Applications"})
-            st.bar_chart(status_counts.set_index("Status"), width="stretch")
-
-        with top_right:
-            st.markdown("**Applications by Job Type**")
-            job_type_counts = _job_type_counts(df)
-            st.bar_chart(job_type_counts.set_index("Job Type"), width="stretch")
-
-        middle_left, middle_right = st.columns(2)
-
-        with middle_left:
-            st.markdown("**Applications by Outcome**")
-            outcome_counts = _outcome_counts(df)
-            st.bar_chart(outcome_counts.set_index("Outcome"), width="stretch")
-
-        with middle_right:
-            st.markdown("**Applications by Company**")
-            company_counts = _company_counts(df)
-            st.bar_chart(company_counts.set_index("Company"), width="stretch")
-
-        st.markdown("**Pipeline Funnel**")
-        funnel_df = _funnel_df(df)
-        st.dataframe(funnel_df, width="stretch", hide_index=True)
+        l, r = st.columns(2)
+        with l:
+            st.markdown("**By Status**")
+            st.bar_chart(_status_counts(df).rename(columns={"Count": "Applications"}).set_index("Status"), width='stretch')
+        with r:
+            st.markdown("**By Job Type**")
+            st.bar_chart(_job_type_counts(df).set_index("Job Type"), width='stretch')
 
 
 def render_application_table(status_filter: str, search_text: str = "") -> None:
-    df = _build_dataframe(status_filter, search_text)
-
+    df = _build_pipeline_df(status_filter, search_text)
     if df.empty:
         st.info("No applications match the current filters.")
         return
 
     st.dataframe(
         df,
-        width="stretch",
         hide_index=True,
+        width='stretch',
+        column_config={
+            "ID":           st.column_config.NumberColumn(width="small"),
+            "Organization": st.column_config.TextColumn(width="medium"),
+            "Role":         st.column_config.TextColumn(width="medium"),
+            "Status":       st.column_config.TextColumn(width="small"),
+            "Applied":      st.column_config.TextColumn(width="small"),
+            "Location":     st.column_config.TextColumn(width="small"),
+            "Type":         st.column_config.TextColumn(width="small"),
+            "Stage":        st.column_config.TextColumn(width="small"),
+            "Follow-Up":    st.column_config.TextColumn(width="small"),
+        },
     )
 
-    st.caption("Filtered application pipeline results.")
+
+
+
+

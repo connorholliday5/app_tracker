@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from urllib.parse import quote
 
@@ -15,6 +15,7 @@ from app.dashboard import (
     render_metrics,
     render_status_breakdown,
 )
+from app.utils import clean_value
 from app.database import (
     create_application,
     create_application_if_not_exists,
@@ -22,19 +23,21 @@ from app.database import (
     get_all_applications,
     get_application_by_id,
     initialize_database,
+    mark_follow_up_sent,
     update_application,
 )
+from app.job_parser import extract_job_application_defaults
 from app.models import Application
-
 
 st.set_page_config(page_title="Career Application Tracker", layout="wide")
 initialize_database()
 
-STATUS_OPTIONS = ["applied", "interview", "rejected", "offer"]
+STATUS_OPTIONS = ["applied", "interview", "rejected", "offer", "withdrawn", "ghosted", "waitlisted"]
 FILTER_OPTIONS = ["all"] + STATUS_OPTIONS
+INTERVIEW_STAGE_OPTIONS = ["", "Phone Screen", "Technical", "Onsite", "Final Round", "Other"]
 JOB_TYPE_OPTIONS = ["", "industry", "research", "internship", "fellowship", "academic", "contract", "other"]
 TEMPLATE_COLUMNS = [
-    "university",
+    "organization",
     "company",
     "department_lab",
     "job_title",
@@ -50,31 +53,56 @@ TEMPLATE_COLUMNS = [
     "notes",
 ]
 
+ADD_FORM_DEFAULTS = {
+    "job_url_input": "",
+    "add_organization": "",
+    "add_company": "",
+    "add_department_lab": "",
+    "add_job_title": "",
+    "add_job_id": "",
+    "add_location": "",
+    "add_application_date": date.today(),
+    "add_status": "applied",
+    "add_job_type": "",
+    "add_interview_stage": "",
+    "add_contact_name": "",
+    "add_contact_email": "",
+    "add_follow_up_date": None,
+    "add_notes": "",
+    "extracted_application_ready": False,
+    "reset_add_application_requested": False,
+}
 
-def parse_date_or_none(value: str):
-    cleaned = (value or "").strip()
-    if not cleaned:
-        return None
-    return datetime.strptime(cleaned, "%Y-%m-%d").date()
+for state_key, default_value in ADD_FORM_DEFAULTS.items():
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default_value
+
+if st.session_state.get("reset_add_application_requested"):
+    st.session_state["job_url_input"] = ""
+    st.session_state["add_organization"] = ""
+    st.session_state["add_company"] = ""
+    st.session_state["add_department_lab"] = ""
+    st.session_state["add_job_title"] = ""
+    st.session_state["add_job_id"] = ""
+    st.session_state["add_location"] = ""
+    st.session_state["add_application_date"] = date.today()
+    st.session_state["add_status"] = "applied"
+    st.session_state["add_job_type"] = ""
+    st.session_state["add_interview_stage"] = ""
+    st.session_state["add_contact_name"] = ""
+    st.session_state["add_contact_email"] = ""
+    st.session_state["add_follow_up_date"] = None
+    st.session_state["add_notes"] = ""
+    st.session_state["extracted_application_ready"] = False
+    st.session_state["reset_add_application_requested"] = False
 
 
-def clean_value(value):
-    if pd.isna(value):
-        return None
 
-    cleaned = str(value).strip()
 
-    if cleaned == "":
-        return None
-
-    if cleaned.lower() in {"nan", "none", "nat"}:
-        return None
-
-    return cleaned
 
 
 def application_from_form(
-    university: str,
+    organization: str,
     company: str,
     department_lab: str,
     job_title: str,
@@ -86,13 +114,12 @@ def application_from_form(
     interview_stage: str,
     contact_name: str,
     contact_email: str,
-    follow_up_date_text: str,
+    follow_up_date,
     notes: str,
 ) -> Application:
-    follow_up_date = parse_date_or_none(follow_up_date_text)
 
     return Application(
-        university=university or company or "",
+        organization=organization or company or "",
         company=company or None,
         department_lab=department_lab or "",
         job_title=job_title,
@@ -104,16 +131,16 @@ def application_from_form(
         interview_stage=interview_stage or None,
         contact_name=contact_name or None,
         contact_email=contact_email or None,
-        follow_up_date=follow_up_date.isoformat() if follow_up_date else None,
+        follow_up_date=follow_up_date.isoformat() if hasattr(follow_up_date, 'isoformat') else follow_up_date,
         notes=notes or None,
     )
 
 
 def application_from_series(row: pd.Series) -> Application:
-    organization_value = clean_value(row.get("university")) or clean_value(row.get("company")) or ""
+    organization_value = clean_value(row.get("organization")) or clean_value(row.get("company")) or ""
 
     return Application(
-        university=organization_value,
+        organization=organization_value,
         company=clean_value(row.get("company")),
         department_lab=clean_value(row.get("department_lab")) or "",
         job_title=clean_value(row.get("job_title")) or "",
@@ -152,7 +179,7 @@ def get_export_excel_bytes(df: pd.DataFrame) -> bytes:
 def generate_follow_up_email(row) -> tuple[str, str]:
     contact_name = (row["contact_name"] or "").strip()
     greeting_name = contact_name if contact_name else "Hiring Team"
-    organization_name = row["company"] or row["university"]
+    organization_name = row["company"] or row["organization"]
     job_title = row["job_title"]
     application_date = row["application_date"]
 
@@ -167,8 +194,8 @@ I remain very interested in this opportunity and genuinely excited about the cha
 I would be grateful for any update you may be able to share regarding the status of my application. Thank you again for your time and consideration.
 
 Best,
-Connor Holliday
-connholl@bu.edu
+{st.secrets.get("user", {}).get("name", "Your Name")}
+{st.secrets.get("user", {}).get("email", "your@email.com")}
 """
     return subject, body
 
@@ -282,45 +309,100 @@ with tab_manage:
 
     with left_col:
         st.subheader("Add Application")
+        st.text_input("Paste Job Posting URL", key="job_url_input")
 
-        with st.form("add_application_form", clear_on_submit=True):
-            add_university = st.text_input("Organization *")
-            add_company = st.text_input("Company")
-            add_department_lab = st.text_input("Team / Department / Lab")
-            add_job_title = st.text_input("Role Title *")
-            add_job_id = st.text_input("Job ID")
-            add_location = st.text_input("Location")
-            add_application_date = st.date_input("Application Date *")
-            add_status = st.selectbox("Status *", STATUS_OPTIONS, index=0)
-            add_job_type = st.selectbox("Job Type", JOB_TYPE_OPTIONS, index=0)
-            add_interview_stage = st.text_input("Interview Stage")
-            add_contact_name = st.text_input("Contact Name")
-            add_contact_email = st.text_input("Contact Email")
-            add_follow_up_date_text = st.text_input("Follow-Up Date (YYYY-MM-DD)")
-            add_notes = st.text_area("Notes")
+        extract_col, clear_col = st.columns(2)
 
-            add_submitted = st.form_submit_button("Add Application")
+        with extract_col:
+            if st.button("Extract Application", key="extract_job_details_button", use_container_width=True):
+                try:
+                    progress_bar = st.progress(0, text="Starting extraction...")
+                    progress_bar.progress(20, text="Fetching job posting...")
+                    extracted = extract_job_application_defaults(st.session_state["job_url_input"])
+                    progress_bar.progress(70, text="Parsing and structuring fields...")
 
-            if add_submitted:
+                    st.session_state["add_organization"] = extracted.get("university") or ""
+                    st.session_state["add_company"] = extracted.get("company") or ""
+                    st.session_state["add_department_lab"] = extracted.get("department_lab") or ""
+                    st.session_state["add_job_title"] = extracted.get("job_title") or ""
+                    st.session_state["add_job_id"] = extracted.get("job_id") or ""
+                    st.session_state["add_location"] = extracted.get("location") or ""
+
+                    extracted_date = extracted.get("application_date")
+                    st.session_state["add_application_date"] = (
+                        datetime.strptime(extracted_date, "%Y-%m-%d").date()
+                        if extracted_date else date.today()
+                    )
+
+                    st.session_state["add_status"] = extracted.get("status") or "applied"
+                    extracted_job_type = extracted.get("job_type") or ""
+                    st.session_state["add_job_type"] = (
+                        extracted_job_type if extracted_job_type in JOB_TYPE_OPTIONS else ""
+                    )
+                    st.session_state["add_interview_stage"] = extracted.get("interview_stage") or ""
+                    st.session_state["add_contact_name"] = extracted.get("contact_name") or ""
+                    st.session_state["add_contact_email"] = extracted.get("contact_email") or ""
+                    fu = extracted.get("follow_up_date")
+                    st.session_state["add_follow_up_date"] = datetime.strptime(fu, "%Y-%m-%d").date() if fu else None
+                    st.session_state["add_notes"] = extracted.get("notes") or ""
+                    st.session_state["extracted_application_ready"] = True
+
+                    progress_bar.progress(100, text="Extraction complete.")
+                    st.success("Application fields populated from the URL.")
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state["extracted_application_ready"] = False
+                    st.error(f"Failed to extract job details: {exc}")
+
+        with clear_col:
+            if st.button("Delete Application", key="clear_job_details_button", use_container_width=True):
+                st.session_state["reset_add_application_requested"] = True
+                st.rerun()
+
+        if st.session_state["extracted_application_ready"]:
+            st.markdown("### Populated Fields")
+
+            preview_rows = [
+                ("Organization", st.session_state["add_organization"] or "Not found"),
+                ("Company", st.session_state["add_company"] or "Not found"),
+                ("Team / Department / Lab", st.session_state["add_department_lab"] or "Not found"),
+                ("Role Title", st.session_state["add_job_title"] or "Not found"),
+                ("Job ID", st.session_state["add_job_id"] or "Not found"),
+                ("Location", st.session_state["add_location"] or "Not found"),
+                ("Application Date", st.session_state["add_application_date"].isoformat() if st.session_state["add_application_date"] else "Not found"),
+                ("Status", st.session_state["add_status"] or "Not found"),
+                ("Job Type", st.session_state["add_job_type"] or "Not found"),
+                ("Interview Stage", st.session_state["add_interview_stage"] or "Not found"),
+                ("Contact Name", st.session_state["add_contact_name"] or "Not found"),
+                ("Contact Email", st.session_state["add_contact_email"] or "Not found"),
+                ("Follow-Up Date", st.session_state["add_follow_up_date"].isoformat() if st.session_state["add_follow_up_date"] else "Not found"),
+                ("Notes", st.session_state["add_notes"] or "Not found"),
+            ]
+
+            preview_df = pd.DataFrame(preview_rows, columns=["Field", "Value"])
+            st.dataframe(preview_df, width="stretch", hide_index=True)
+
+            if st.button("Add Application", key="add_extracted_application_button", use_container_width=True):
                 try:
                     new_application = application_from_form(
-                        university=add_university,
-                        company=add_company,
-                        department_lab=add_department_lab,
-                        job_title=add_job_title,
-                        job_id=add_job_id,
-                        location=add_location,
-                        application_date=add_application_date,
-                        status=add_status,
-                        job_type=add_job_type,
-                        interview_stage=add_interview_stage,
-                        contact_name=add_contact_name,
-                        contact_email=add_contact_email,
-                        follow_up_date_text=add_follow_up_date_text,
-                        notes=add_notes,
+                        organization=st.session_state["add_organization"],
+                        company=st.session_state["add_company"],
+                        department_lab=st.session_state["add_department_lab"],
+                        job_title=st.session_state["add_job_title"],
+                        job_id=st.session_state["add_job_id"],
+                        location=st.session_state["add_location"],
+                        application_date=st.session_state["add_application_date"],
+                        status=st.session_state["add_status"],
+                        job_type=st.session_state["add_job_type"],
+                        interview_stage=st.session_state["add_interview_stage"],
+                        contact_name=st.session_state["add_contact_name"],
+                        contact_email=st.session_state["add_contact_email"],
+                        follow_up_date=st.session_state["add_follow_up_date"],
+                        notes=st.session_state["add_notes"],
                     )
                     new_id = create_application(new_application)
                     st.success(f"Application added successfully with ID {new_id}.")
+                    st.session_state["reset_add_application_requested"] = True
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Failed to add application: {exc}")
@@ -330,7 +412,7 @@ with tab_manage:
 
         all_rows = get_all_applications()
         application_options = {
-            f'ID {row["id"]} | {(row["company"] or row["university"])} | {row["job_title"]}': row["id"]
+            f'ID {row["id"]} | {(row["company"] or row["organization"])} | {row["job_title"]}': row["id"]
             for row in all_rows
         }
 
@@ -346,11 +428,11 @@ with tab_manage:
             selected_row = get_application_by_id(selected_id)
 
             if selected_row:
-                existing_follow_up_date = selected_row["follow_up_date"] or ""
+                existing_follow_up_date = datetime.strptime(selected_row["follow_up_date"], "%Y-%m-%d").date() if selected_row["follow_up_date"] else None
                 existing_job_type = selected_row["job_type"] or ""
 
                 with st.form("edit_application_form"):
-                    edit_university = st.text_input("Organization *", value=selected_row["university"])
+                    edit_organization = st.text_input("Organization *", value=selected_row["organization"])
                     edit_company = st.text_input("Company", value=selected_row["company"] or "")
                     edit_department_lab = st.text_input("Team / Department / Lab", value=selected_row["department_lab"] or "")
                     edit_job_title = st.text_input("Role Title *", value=selected_row["job_title"])
@@ -370,22 +452,21 @@ with tab_manage:
                         JOB_TYPE_OPTIONS,
                         index=JOB_TYPE_OPTIONS.index(existing_job_type) if existing_job_type in JOB_TYPE_OPTIONS else 0,
                     )
-                    edit_interview_stage = st.text_input("Interview Stage", value=selected_row["interview_stage"] or "")
+                    _stage_val = selected_row["interview_stage"] or ""
+                    _stage_idx = INTERVIEW_STAGE_OPTIONS.index(_stage_val) if _stage_val in INTERVIEW_STAGE_OPTIONS else 0
+                    edit_interview_stage = st.selectbox("Interview Stage", INTERVIEW_STAGE_OPTIONS, index=_stage_idx)
                     edit_contact_name = st.text_input("Contact Name", value=selected_row["contact_name"] or "")
                     edit_contact_email = st.text_input("Contact Email", value=selected_row["contact_email"] or "")
-                    edit_follow_up_date_text = st.text_input(
-                        "Follow-Up Date (YYYY-MM-DD)",
-                        value=existing_follow_up_date,
-                    )
+                    edit_follow_up_date = st.date_input("Follow-Up Date", value=existing_follow_up_date)
                     edit_notes = st.text_area("Notes", value=selected_row["notes"] or "")
 
                     update_submitted = st.form_submit_button("Update Application")
-                    delete_submitted = st.form_submit_button("Delete Application")
+
 
                     if update_submitted:
                         try:
                             updated_application = application_from_form(
-                                university=edit_university,
+                                university=edit_organization,
                                 company=edit_company,
                                 department_lab=edit_department_lab,
                                 job_title=edit_job_title,
@@ -397,7 +478,7 @@ with tab_manage:
                                 interview_stage=edit_interview_stage,
                                 contact_name=edit_contact_name,
                                 contact_email=edit_contact_email,
-                                follow_up_date_text=edit_follow_up_date_text,
+                                follow_up_date=edit_follow_up_date,
                                 notes=edit_notes,
                             )
                             updated = update_application(selected_id, updated_application)
@@ -409,16 +490,26 @@ with tab_manage:
                         except Exception as exc:
                             st.error(f"Failed to update application: {exc}")
 
-                    if delete_submitted:
+            if st.button("Delete Application", key="delete_btn", type="secondary"):
+                st.session_state["confirm_delete_id"] = selected_id
+
+            if st.session_state.get("confirm_delete_id") == selected_id:
+                st.warning(f"Delete application ID {selected_id}? This cannot be undone.")
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("Confirm Delete", key="confirm_delete_btn", type="primary"):
                         try:
                             deleted = delete_application(selected_id)
                             if deleted:
-                                st.success(f"Application ID {selected_id} deleted successfully.")
+                                st.session_state.pop("confirm_delete_id", None)
+                                st.success(f"Application ID {selected_id} deleted.")
                                 st.rerun()
-                            else:
-                                st.error("No application was deleted.")
                         except Exception as exc:
-                            st.error(f"Failed to delete application: {exc}")
+                            st.error(f"Failed to delete: {exc}")
+                with cancel_col:
+                    if st.button("Cancel", key="cancel_delete_btn"):
+                        st.session_state.pop("confirm_delete_id", None)
+                        st.rerun()
 
 with tab_import_export:
     st.subheader("Import / Export")
@@ -452,7 +543,7 @@ with tab_import_export:
                     missing = [column for column in required_columns if column not in preview_df.columns]
                     if missing:
                         st.error(f"Missing required columns: {missing}")
-                    elif "university" not in preview_df.columns and "company" not in preview_df.columns:
+                    elif "organization" not in preview_df.columns and "company" not in preview_df.columns:
                         st.error("CSV must include at least one of: university or company")
                     else:
                         for column in TEMPLATE_COLUMNS:
@@ -516,7 +607,7 @@ with tab_followups:
     else:
         st.caption("Select an application below to generate a follow-up email draft and open it in Gmail.")
         email_options = {
-            f'ID {row["id"]} | {(row["company"] or row["university"])} | {row["job_title"]}': row["id"]
+            f'ID {row["id"]} | {(row["company"] or row["organization"])} | {row["job_title"]}': row["id"]
             for row in follow_up_candidates
         }
 
@@ -532,7 +623,7 @@ with tab_followups:
             followup_meta_left, followup_meta_right = st.columns(2)
 
             with followup_meta_left:
-                st.markdown(f"**Organization:** {selected_email_row['university']}")
+                st.markdown(f"**Organization:** {selected_email_row['organization']}")
                 st.markdown(f"**Company:** {selected_email_row['company'] or 'Not saved'}")
                 st.markdown(f"**Role Title:** {selected_email_row['job_title']}")
 
@@ -554,14 +645,25 @@ with tab_followups:
 
             st.text_area("Generated Follow-Up Email", value=email_draft, height=320)
 
-            followup_action_left, followup_action_right = st.columns(2)
+            followup_action_left, followup_action_middle, followup_action_right = st.columns(3)
 
             with followup_action_left:
                 st.link_button("Open Gmail Draft", gmail_url, use_container_width=True)
+
+            with followup_action_middle:
+                if st.button("Mark Follow-Up Sent", key=f"mark_followup_sent_{selected_email_id}", use_container_width=True):
+                    updated = mark_follow_up_sent(selected_email_id)
+                    if updated:
+                        st.success("Follow-up marked as sent. The 14-day timer has been reset.")
+                        st.rerun()
+                    else:
+                        st.error("Failed to reset the follow-up timer.")
 
             with followup_action_right:
                 if selected_email_row["contact_email"]:
                     st.caption(f"Recipient: {selected_email_row['contact_email']}")
                 else:
                     st.caption("Recipient: no contact email saved for this application")
+
+
 

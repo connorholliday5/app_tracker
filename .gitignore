@@ -22,3 +22,5 @@ temp.xlsx
 build/
 dist/
 *.egg-info
+
+data/

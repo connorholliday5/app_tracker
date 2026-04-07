@@ -50,7 +50,7 @@ def date_to_iso(value: Optional[date]) -> Optional[str]:
 
 
 def normalize_status(value: str) -> str:
-    allowed_statuses = {"applied", "interview", "rejected", "offer"}
+    allowed_statuses = {"applied", "interview", "rejected", "offer", "withdrawn", "ghosted", "waitlisted"}
     cleaned = normalize_required_text(value, "status").lower()
 
     if cleaned not in allowed_statuses:
@@ -60,12 +60,14 @@ def normalize_status(value: str) -> str:
     return cleaned
 
 
-def calculate_follow_up_needed(status: str, application_date: str) -> bool:
-    normalized_status = normalize_status(status)
-    applied_on = parse_iso_date(application_date, "application_date", required=True)
 
-    if normalized_status != "applied":
-        return False
-
-    days_since_application = (date.today() - applied_on).days
-    return days_since_application >= 14
+def clean_value(value) -> str | None:
+    import pandas as pd
+    if pd.isna(value):
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in {"nan", "none", "nat"}:
+        return None
+    return cleaned

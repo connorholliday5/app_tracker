@@ -3,6 +3,7 @@ import pandas as pd
 
 from app.database import create_application_if_not_exists, initialize_database
 from app.models import Application
+from app.utils import clean_value
 
 
 REQUIRED_COLUMNS = [
@@ -12,7 +13,7 @@ REQUIRED_COLUMNS = [
 ]
 
 ALL_COLUMNS = [
-    "university",
+    "organization",
     "company",
     "department_lab",
     "job_title",
@@ -59,8 +60,8 @@ def main():
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    if "university" not in df.columns and "company" not in df.columns:
-        raise ValueError("CSV must include at least one of: university or company")
+    if "organization" not in df.columns and "company" not in df.columns:
+        raise ValueError("CSV must include at least one of: organization or company")
 
     for column in ALL_COLUMNS:
         if column not in df.columns:
@@ -71,10 +72,10 @@ def main():
 
     for row_number, (_, row) in enumerate(df.iterrows(), start=2):
         try:
-            organization_value = clean_value(row.get("university")) or clean_value(row.get("company")) or ""
+            organization_value = clean_value(row.get("organization")) or clean_value(row.get("company")) or ""
 
             app = Application(
-                university=organization_value,
+                organization=organization_value,
                 company=clean_value(row.get("company")),
                 department_lab=clean_value(row.get("department_lab")) or "",
                 job_title=clean_value(row.get("job_title")) or "",

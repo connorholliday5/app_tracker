@@ -34,12 +34,10 @@ def calculate_follow_up_needed(status: str, application_date: str, follow_up_dat
     if normalized_status != "applied":
         return False
 
-    if followed_up_on is not None:
-        return False
-
     from datetime import date
-    days_since_application = (date.today() - applied_on).days
-    return days_since_application >= 14
+    reference_date = followed_up_on if followed_up_on is not None else applied_on
+    days_since_reference = (date.today() - reference_date).days
+    return days_since_reference >= 14
 
 
 def _get_existing_columns(conn: sqlite3.Connection) -> set[str]:
@@ -59,7 +57,7 @@ def initialize_database() -> None:
             '''
             CREATE TABLE IF NOT EXISTS applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                university TEXT NOT NULL,
+                organization TEXT NOT NULL,
                 department_lab TEXT NOT NULL,
                 job_title TEXT NOT NULL,
                 job_id TEXT,
@@ -118,11 +116,11 @@ def refresh_follow_up_flags() -> None:
 
 
 def _normalize_primary_organization(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
-    university_value = normalize_text(payload.get("university"))
+    organization_value = normalize_text(payload.get("organization"))
     company_value = normalize_text(payload.get("company"))
 
-    if university_value:
-        return university_value, company_value
+    if organization_value:
+        return organization_value, company_value
 
     if company_value:
         return company_value, company_value
@@ -131,10 +129,10 @@ def _normalize_primary_organization(payload: Dict[str, Any]) -> tuple[str, Optio
 
 
 def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized_university, normalized_company = _normalize_primary_organization(payload)
+    normalized_organization, normalized_company = _normalize_primary_organization(payload)
 
     validated = {
-        "university": normalized_university,
+        "organization": normalized_organization,
         "company": normalized_company,
         "department_lab": normalize_text(payload.get("department_lab")) or "",
         "job_title": normalize_required_text(payload.get("job_title"), "job_title"),
@@ -166,7 +164,7 @@ def validate_application_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def application_exists(
-    university: str,
+    organization: str,
     job_title: str,
     job_id: Optional[str],
     application_date: str,
@@ -176,70 +174,55 @@ def application_exists(
             '''
             SELECT id
             FROM applications
-            WHERE university = ?
+            WHERE organization = ?
               AND job_title = ?
               AND COALESCE(job_id, '') = COALESCE(?, '')
               AND application_date = ?
             LIMIT 1
             ''',
-            (university, job_title, job_id, application_date),
+            (organization, job_title, job_id, application_date),
         ).fetchone()
 
     return row is not None
+
+
+
+def _insert_application(conn, payload: dict) -> int:
+    cursor = conn.execute(
+        '''
+        INSERT INTO applications (
+            organization, company, department_lab, job_title, job_id, location,
+            application_date, status, job_type, interview_stage, contact_name,
+            contact_email, follow_up_date, notes, follow_up_needed
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''',
+        (
+            payload["organization"], payload["company"], payload["department_lab"],
+            payload["job_title"], payload["job_id"], payload["location"],
+            payload["application_date"], payload["status"], payload["job_type"],
+            payload["interview_stage"], payload["contact_name"], payload["contact_email"],
+            payload["follow_up_date"], payload["notes"], payload["follow_up_needed"],
+        ),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
 
 
 def create_application(application: Application) -> int:
     payload = validate_application_payload(application.__dict__)
 
     with get_connection() as conn:
-        cursor = conn.execute(
-            '''
-            INSERT INTO applications (
-                university,
-                company,
-                department_lab,
-                job_title,
-                job_id,
-                location,
-                application_date,
-                status,
-                job_type,
-                interview_stage,
-                contact_name,
-                contact_email,
-                follow_up_date,
-                notes,
-                follow_up_needed
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                payload["university"],
-                payload["company"],
-                payload["department_lab"],
-                payload["job_title"],
-                payload["job_id"],
-                payload["location"],
-                payload["application_date"],
-                payload["status"],
-                payload["job_type"],
-                payload["interview_stage"],
-                payload["contact_name"],
-                payload["contact_email"],
-                payload["follow_up_date"],
-                payload["notes"],
-                payload["follow_up_needed"],
-            ),
-        )
-        conn.commit()
-        return int(cursor.lastrowid)
+        new_id = _insert_application(conn, payload)
+    refresh_follow_up_flags()
+    return new_id
 
 
 def create_application_if_not_exists(application: Application) -> tuple[bool, Optional[int]]:
     payload = validate_application_payload(application.__dict__)
 
     if application_exists(
-        university=payload["university"],
+        organization=payload["organization"],
         job_title=payload["job_title"],
         job_id=payload["job_id"],
         application_date=payload["application_date"],
@@ -247,51 +230,12 @@ def create_application_if_not_exists(application: Application) -> tuple[bool, Op
         return False, None
 
     with get_connection() as conn:
-        cursor = conn.execute(
-            '''
-            INSERT INTO applications (
-                university,
-                company,
-                department_lab,
-                job_title,
-                job_id,
-                location,
-                application_date,
-                status,
-                job_type,
-                interview_stage,
-                contact_name,
-                contact_email,
-                follow_up_date,
-                notes,
-                follow_up_needed
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                payload["university"],
-                payload["company"],
-                payload["department_lab"],
-                payload["job_title"],
-                payload["job_id"],
-                payload["location"],
-                payload["application_date"],
-                payload["status"],
-                payload["job_type"],
-                payload["interview_stage"],
-                payload["contact_name"],
-                payload["contact_email"],
-                payload["follow_up_date"],
-                payload["notes"],
-                payload["follow_up_needed"],
-            ),
-        )
-        conn.commit()
-        return True, int(cursor.lastrowid)
+        new_id = _insert_application(conn, payload)
+    refresh_follow_up_flags()
+    return True, new_id
 
 
 def get_all_applications(status: Optional[str] = None) -> List[sqlite3.Row]:
-    refresh_follow_up_flags()
 
     query = "SELECT * FROM applications"
     params: tuple = ()
@@ -309,7 +253,6 @@ def get_all_applications(status: Optional[str] = None) -> List[sqlite3.Row]:
 
 
 def get_application_by_id(application_id: int) -> Optional[sqlite3.Row]:
-    refresh_follow_up_flags()
 
     with get_connection() as conn:
         row = conn.execute(
@@ -331,7 +274,7 @@ def update_application(application_id: int, application: Application) -> bool:
         cursor = conn.execute(
             '''
             UPDATE applications
-            SET university = ?,
+            SET organization = ?,
                 company = ?,
                 department_lab = ?,
                 job_title = ?,
@@ -350,7 +293,7 @@ def update_application(application_id: int, application: Application) -> bool:
             WHERE id = ?
             ''',
             (
-                payload["university"],
+                payload["organization"],
                 payload["company"],
                 payload["department_lab"],
                 payload["job_title"],
@@ -377,6 +320,22 @@ def delete_application(application_id: int) -> bool:
         cursor = conn.execute(
             '''
             DELETE FROM applications
+            WHERE id = ?
+            ''',
+            (application_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def mark_follow_up_sent(application_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            '''
+            UPDATE applications
+            SET follow_up_date = DATE('now'),
+                follow_up_needed = 0,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             ''',
             (application_id,),
