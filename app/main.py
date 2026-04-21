@@ -30,6 +30,27 @@ from app.job_parser import extract_job_application_defaults
 from app.models import Application
 
 st.set_page_config(page_title="Career Application Tracker", layout="wide")
+
+def _check_auth() -> bool:
+    import os
+    pw = st.secrets.get("passwords", {}).get("admin") or os.environ.get("APP_PASSWORD")
+    if not pw:
+        return True
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+    if st.session_state["authenticated"]:
+        return True
+    st.markdown("### Career Application Tracker")
+    entered = st.text_input("Password", type="password", key="auth_password_input")
+    if st.button("Sign In", key="auth_signin_btn"):
+        if entered == pw:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
+_check_auth()
 initialize_database()
 
 STATUS_OPTIONS = ["applied", "interview", "rejected", "offer", "withdrawn", "ghosted", "waitlisted"]
