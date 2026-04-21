@@ -214,95 +214,119 @@ def build_gmail_draft_url(to_email: str | None, subject: str, body: str) -> str:
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 2rem;
+    padding-top: 1.5rem;
     padding-bottom: 2rem;
     max-width: 1200px;
 }
 [data-testid="stMetric"] {
     background-color: #ffffff;
     border: 1px solid #E5E7EB;
-    padding: 1rem 1rem 0.9rem 1rem;
-    border-radius: 14px;
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
 }
 div[data-testid="stMetricLabel"] {
     font-weight: 600;
+    font-size: 0.8rem;
 }
-.hero-card {
-    background: linear-gradient(135deg, #EFF6FF 0%, #FFFFFF 100%);
-    border: 1px solid #DBEAFE;
-    border-radius: 20px;
-    padding: 1.35rem 1.4rem 1.2rem 1.4rem;
-    margin-bottom: 1rem;
+.app-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding-top: 0.25rem;
 }
-.hero-title {
-    font-size: 2.2rem;
-    font-weight: 800;
+.app-title {
+    font-size: 1.3rem;
+    font-weight: 700;
     color: #0F172A;
-    line-height: 1.1;
-    margin-bottom: 0.35rem;
 }
-.hero-subtitle {
-    font-size: 1rem;
-    color: #475467;
-    margin-bottom: 0.9rem;
-}
-.hero-meta {
-    font-size: 0.95rem;
-    color: #344054;
+.app-subtitle {
+    font-size: 0.85rem;
+    color: #6B7280;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="hero-card">
-    <div class="hero-title">Career Application Tracker</div>
-    <div class="hero-subtitle">Track applications, follow-ups, and job search analytics in one place.</div>
-    <div class="hero-meta">Built for industry, research, academic, internship, and other professional application workflows.</div>
+<div class="app-header">
+    <span class="app-title">Career Application Tracker</span>
+    <span class="app-subtitle">— track applications, follow-ups, and analytics</span>
 </div>
 """, unsafe_allow_html=True)
 
-tab_dashboard, tab_pipeline, tab_manage, tab_import_export, tab_followups = st.tabs(
-    ["Overview", "Pipeline", "Manage Applications", "Import / Export", "Follow-Ups"]
+tab_dashboard, tab_pipeline, tab_analytics, tab_manage = st.tabs(
+    ["Dashboard", "Applications", "Analytics", "Add / Edit"]
 )
 
 with tab_dashboard:
     render_metrics()
-    st.divider()
-    render_job_search_stats()
-    st.divider()
-
-    top_left, top_right = st.columns([1.1, 1.9])
-
-    with top_left:
+    st.markdown("---")
+    left_col, right_col = st.columns([1, 1.8])
+    with left_col:
         render_status_breakdown()
-
-    with top_right:
+    with right_col:
         render_follow_up_alerts()
+        fu_rows = get_all_applications()
+        fu_candidates = [row for row in fu_rows if int(row["follow_up_needed"]) == 1]
+        if fu_candidates:
+            fu_options = {
+                f'ID {row["id"]} | {row["organization"]} | {row["job_title"]}': row["id"]
+                for row in fu_candidates
+            }
+            selected_fu_label = st.selectbox(
+                "Generate email draft:",
+                options=list(fu_options.keys()),
+                key="dashboard_followup_select",
+            )
+            selected_fu_id = fu_options[selected_fu_label]
+            selected_fu_row = get_application_by_id(selected_fu_id)
+            if selected_fu_row:
+                subject, body = generate_follow_up_email(selected_fu_row)
+                gmail_url = build_gmail_draft_url(selected_fu_row["contact_email"], subject, body)
+                email_draft = f"Subject: {subject}\n\n{body}"
+                st.text_area("Draft", value=email_draft, height=160, key="dashboard_email_draft")
+                btn_l, btn_r = st.columns(2)
+                with btn_l:
+                    st.link_button("Open in Gmail", gmail_url, width="stretch")
+                with btn_r:
+                    if st.button("Mark Sent", key=f"dash_mark_sent_{selected_fu_id}", width="stretch"):
+                        if mark_follow_up_sent(selected_fu_id):
+                            st.success("Marked as sent.")
+                            st.rerun()
 
-    st.divider()
-    render_analytics()
 
 with tab_pipeline:
-    st.subheader("Applications")
+    f_col, s_col, sort_col = st.columns([1.2, 2, 1])
 
-    filter_col, search_col = st.columns([1, 1.4])
-
-    with filter_col:
-        selected_filter = st.selectbox(
+    with f_col:
+        selected_statuses = st.multiselect(
             "Filter by Status",
-            FILTER_OPTIONS,
-            index=0,
+            STATUS_OPTIONS,
+            default=[],
+            placeholder="All statuses",
             key="applications_status_filter"
         )
 
-    with search_col:
+    with s_col:
         search_text = st.text_input(
-            "Search Applications",
-            placeholder="Search organization, company, role title, notes, contact, location, job ID, or job type",
-            key="applications_search_text"
+            "Search",
+            placeholder="Organization, role, location, notes...",
+            key="applications_search_text",
+            label_visibility="collapsed"
         )
 
-    render_application_table(selected_filter, search_text)
+    with sort_col:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["Date (newest)", "Date (oldest)", "Organization", "Status"],
+            key="applications_sort",
+            label_visibility="collapsed"
+        )
+
+    render_application_table(selected_statuses, search_text, sort_by)
+
+with tab_analytics:
+    render_analytics()
 
 with tab_manage:
     left_col, right_col = st.columns([1.15, 1.85])
@@ -402,6 +426,7 @@ with tab_manage:
                     )
                     new_id = create_application(new_application)
                     st.success(f"Application added successfully with ID {new_id}.")
+                    st.cache_data.clear()
                     st.session_state["reset_add_application_requested"] = True
                     st.rerun()
                 except Exception as exc:
@@ -466,7 +491,7 @@ with tab_manage:
                     if update_submitted:
                         try:
                             updated_application = application_from_form(
-                                university=edit_organization,
+                                organization=edit_organization,
                                 company=edit_company,
                                 department_lab=edit_department_lab,
                                 job_title=edit_job_title,
@@ -484,6 +509,7 @@ with tab_manage:
                             updated = update_application(selected_id, updated_application)
                             if updated:
                                 st.success(f"Application ID {selected_id} updated successfully.")
+                                st.cache_data.clear()
                                 st.rerun()
                             else:
                                 st.error("No application was updated.")
@@ -503,6 +529,7 @@ with tab_manage:
                             if deleted:
                                 st.session_state.pop("confirm_delete_id", None)
                                 st.success(f"Application ID {selected_id} deleted.")
+                                st.cache_data.clear()
                                 st.rerun()
                         except Exception as exc:
                             st.error(f"Failed to delete: {exc}")
@@ -511,159 +538,9 @@ with tab_manage:
                         st.session_state.pop("confirm_delete_id", None)
                         st.rerun()
 
-with tab_import_export:
-    st.subheader("Import / Export")
 
-    import_col, export_col = st.columns(2)
 
-    with import_col:
-        st.markdown("### CSV Import")
-        st.download_button(
-            label="Download CSV Template",
-            data=get_template_csv_bytes(),
-            file_name="career_application_tracker_template.csv",
-            mime="text/csv",
-        )
 
-        uploaded_file = st.file_uploader("Upload Applications CSV", type="csv")
-
-        if uploaded_file is not None:
-            try:
-                preview_df = pd.read_csv(uploaded_file)
-                st.markdown("**Preview**")
-                st.dataframe(preview_df, width="stretch", hide_index=True)
-
-                if st.button("Import Uploaded CSV", key="import_uploaded_csv_button"):
-                    required_columns = [
-                        "job_title",
-                        "application_date",
-                        "status",
-                    ]
-
-                    missing = [column for column in required_columns if column not in preview_df.columns]
-                    if missing:
-                        st.error(f"Missing required columns: {missing}")
-                    elif "organization" not in preview_df.columns and "company" not in preview_df.columns:
-                        st.error("CSV must include at least one of: university or company")
-                    else:
-                        for column in TEMPLATE_COLUMNS:
-                            if column not in preview_df.columns:
-                                preview_df[column] = None
-
-                        inserted = 0
-                        skipped = 0
-
-                        for row_number, (_, row) in enumerate(preview_df.iterrows(), start=2):
-                            try:
-                                app = application_from_series(row)
-                                created, _ = create_application_if_not_exists(app)
-                                if created:
-                                    inserted += 1
-                                else:
-                                    skipped += 1
-                            except Exception as exc:
-                                st.error(f"Import failed on CSV row {row_number}: {exc}")
-                                st.stop()
-
-                        st.success(f"Imported {inserted} applications successfully.")
-                        st.info(f"Skipped {skipped} duplicate applications.")
-                        st.rerun()
-            except Exception as exc:
-                st.error(f"Unable to read uploaded CSV: {exc}")
-
-    with export_col:
-        st.markdown("### Data Export")
-
-        export_df = get_export_dataframe()
-
-        if export_df.empty:
-            st.info("No application data available to export.")
-        else:
-            csv_bytes = export_df.to_csv(index=False).encode("utf-8")
-            excel_bytes = get_export_excel_bytes(export_df)
-
-            st.download_button(
-                label="Download CSV Export",
-                data=csv_bytes,
-                file_name="career_application_tracker_export.csv",
-                mime="text/csv",
-            )
-
-            st.download_button(
-                label="Download Excel Export",
-                data=excel_bytes,
-                file_name="career_application_tracker_export.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-with tab_followups:
-    st.subheader("Follow-Up Queue")
-
-    all_rows_for_email = get_all_applications()
-    follow_up_candidates = [row for row in all_rows_for_email if int(row["follow_up_needed"]) == 1]
-
-    if not follow_up_candidates:
-        st.info("No follow-up email drafts are needed right now.")
-    else:
-        st.caption("Select an application below to generate a follow-up email draft and open it in Gmail.")
-        email_options = {
-            f'ID {row["id"]} | {(row["company"] or row["organization"])} | {row["job_title"]}': row["id"]
-            for row in follow_up_candidates
-        }
-
-        selected_email_label = st.selectbox(
-            "Select Application for Follow-Up Draft",
-            options=list(email_options.keys()),
-            key="followup_draft_select",
-        )
-        selected_email_id = email_options[selected_email_label]
-        selected_email_row = get_application_by_id(selected_email_id)
-
-        if selected_email_row:
-            followup_meta_left, followup_meta_right = st.columns(2)
-
-            with followup_meta_left:
-                st.markdown(f"**Organization:** {selected_email_row['organization']}")
-                st.markdown(f"**Company:** {selected_email_row['company'] or 'Not saved'}")
-                st.markdown(f"**Role Title:** {selected_email_row['job_title']}")
-
-            with followup_meta_right:
-                st.markdown(f"**Applied On:** {selected_email_row['application_date']}")
-                st.markdown(f"**Job Type:** {selected_email_row['job_type'] or 'Not specified'}")
-                if selected_email_row["contact_email"]:
-                    st.markdown(f"**Contact Email:** {selected_email_row['contact_email']}")
-                else:
-                    st.markdown("**Contact Email:** Not saved")
-
-            subject, body = generate_follow_up_email(selected_email_row)
-            email_draft = f"Subject: {subject}\n\n{body}"
-            gmail_url = build_gmail_draft_url(
-                selected_email_row["contact_email"],
-                subject,
-                body,
-            )
-
-            st.text_area("Generated Follow-Up Email", value=email_draft, height=320)
-
-            followup_action_left, followup_action_middle, followup_action_right = st.columns(3)
-
-            with followup_action_left:
-                st.link_button("Open Gmail Draft", gmail_url, use_container_width=True)
-
-            with followup_action_middle:
-                if st.button("Mark Follow-Up Sent", key=f"mark_followup_sent_{selected_email_id}", use_container_width=True):
-                    updated = mark_follow_up_sent(selected_email_id)
-                    if updated:
-                        st.success("Follow-up marked as sent. The 14-day timer has been reset.")
-                        st.rerun()
-                    else:
-                        st.error("Failed to reset the follow-up timer.")
-
-            with followup_action_right:
-                if selected_email_row["contact_email"]:
-                    st.caption(f"Recipient: {selected_email_row['contact_email']}")
-                else:
-                    st.caption("Recipient: no contact email saved for this application")
 
 
 

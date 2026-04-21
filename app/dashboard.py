@@ -56,17 +56,16 @@ def _get_all_df() -> pd.DataFrame:
     return pd.DataFrame([dict(row) for row in applications])
 
 
-def _build_pipeline_df(status_filter: str, search_text: str = "") -> pd.DataFrame:
-    applications = (
-        get_all_applications()
-        if status_filter == "all"
-        else get_all_applications(status=status_filter)
-    )
+def _build_pipeline_df(status_filters: list, search_text: str = "", sort_by: str = "Date (newest)") -> pd.DataFrame:
+    applications = get_all_applications()
 
     if not applications:
         return pd.DataFrame()
 
     df = pd.DataFrame([dict(row) for row in applications])
+
+    if status_filters:
+        df = df[df["status"].isin(status_filters)]
 
     if search_text.strip():
         q = search_text.strip().lower()
@@ -77,9 +76,18 @@ def _build_pipeline_df(status_filter: str, search_text: str = "") -> pd.DataFram
     if df.empty:
         return pd.DataFrame()
 
+    if sort_by == "Date (oldest)":
+        df = df.sort_values("application_date", ascending=True)
+    elif sort_by == "Organization":
+        df = df.sort_values("organization", ascending=True)
+    elif sort_by == "Status":
+        df = df.sort_values("status", ascending=True)
+    else:
+        df = df.sort_values("application_date", ascending=False)
+
     df["status_badge"] = df["status"].apply(_status_badge)
     df["application_date"] = df["application_date"].apply(_fmt_date)
-    df["follow_up_needed"] = df["follow_up_needed"].apply(lambda v: "⚠️ Yes" if int(v) == 1 else "—")
+    df["follow_up_needed"] = df["follow_up_needed"].apply(lambda v: "⚠️" if int(v) == 1 else "")
 
     for col in ["location", "job_type", "interview_stage", "organization", "job_title"]:
         df[col] = df[col].apply(_fmt_text)
@@ -94,50 +102,42 @@ def _build_pipeline_df(status_filter: str, search_text: str = "") -> pd.DataFram
         "location": "Location",
         "job_type": "Type",
         "interview_stage": "Stage",
-        "follow_up_needed": "Follow-Up",
+        "follow_up_needed": "⚠️",
     })
 
 
 def render_metrics() -> None:
+    from datetime import date as _date
+    import pandas as pd
     metrics = get_dashboard_metrics()
     df = _get_all_df()
-    active = 0
-    offers = 0
+    active = offers = rejected = apps_today = 0
+    follow_ups = metrics["follow_ups_needed"]
+    total = metrics["total_applications"]
     if not df.empty:
         active = int(df["status"].isin(["applied", "interview", "waitlisted"]).sum())
         offers = int((df["status"] == "offer").sum())
+        rejected = int((df["status"] == "rejected").sum())
+        today_str = _date.today().isoformat()
+        apps_today = int((df["application_date"] == today_str).sum())
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Applications", metrics["total_applications"])
-    c2.metric("Active", active)
-    c3.metric("Interviews", metrics["interviews"])
-    c4.metric("Offers", offers)
-    c5.metric("Follow-Ups Needed", metrics["follow_ups_needed"])
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active", active)
+    c2.metric("Rejected", rejected)
+    c3.metric("Total", total)
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Offers", offers)
+    r2.metric("Follow-Ups", follow_ups)
+    r3.metric("Applied Today", apps_today)
 
 
 def render_job_search_stats() -> None:
-    st.subheader('Pipeline Snapshot')
-    df = _get_all_df()
-    if df.empty:
-        st.info("No application data yet.")
-        return
-
-    total = len(df)
-    interviews = int((df["status"] == "interview").sum())
-    rejections = int((df["status"] == "rejected").sum())
-    offers = int((df["status"] == "offer").sum())
-    response_rate = round(((interviews + rejections + offers) / total) * 100, 1) if total else 0.0
-    interview_rate = round((interviews / total) * 100, 1) if total else 0.0
-    offer_rate = round((offers / total) * 100, 1) if total else 0.0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Response Rate", f"{response_rate}%")
-    c2.metric("Interview Rate", f"{interview_rate}%")
-    c3.metric("Offer Rate", f"{offer_rate}%")
+    pass
 
 
 def render_status_breakdown() -> None:
-    st.subheader("Status Breakdown")
+    st.markdown("**Status Breakdown**")
     df = _get_all_df()
     if df.empty:
         st.info("No data yet.")
@@ -146,17 +146,16 @@ def render_status_breakdown() -> None:
     counts = df["status"].value_counts().to_dict()
 
     st.caption("Active")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🔵 Applied",    counts.get("applied", 0))
-    c2.metric("🟢 Interview",  counts.get("interview", 0))
-    c3.metric("🟠 Waitlist",   counts.get("waitlisted", 0))
-    c4.metric("⭐ Offer",      counts.get("offer", 0))
+    a1, a2, a3 = st.columns(3)
+    a1.metric("🔵 Applied", counts.get("applied", 0))
+    a2.metric("🟢 Active", counts.get("interview", 0))
+    a3.metric("🟠 Waitlist", counts.get("waitlisted", 0))
 
     st.caption("Closed")
-    d1, d2, d3 = st.columns(3)
-    d1.metric("🔴 Rejected",   counts.get("rejected", 0))
-    d2.metric("⚪ Withdrawn",  counts.get("withdrawn", 0))
-    d3.metric("👻 Ghosted",    counts.get("ghosted", 0))
+    b1, b2, b3 = st.columns(3)
+    b1.metric("🔴 Rejected", counts.get("rejected", 0))
+    b2.metric("⭐ Offer", counts.get("offer", 0))
+    b3.metric("👻 Ghosted", counts.get("ghosted", 0))
 
 
 def render_follow_up_alerts() -> None:
@@ -188,7 +187,7 @@ def render_follow_up_alerts() -> None:
         "contact_email": "Contact",
     })
 
-    st.warning(f"{len(display)} application(s) ready for follow-up.")
+    st.caption(f"{len(display)} application(s) ready for follow-up")
     st.dataframe(display, hide_index=True, width='stretch')
 
 
@@ -238,38 +237,39 @@ def render_analytics() -> None:
     st.markdown("**Applications by Organization**")
     st.bar_chart(_org_counts(df).set_index("Organization"), width='stretch')
 
-    with st.expander("More Analytics", expanded=False):
-        l, r = st.columns(2)
-        with l:
-            st.markdown("**By Status**")
-            st.bar_chart(_status_counts(df).rename(columns={"Count": "Applications"}).set_index("Status"), width='stretch')
-        with r:
-            st.markdown("**By Job Type**")
-            st.bar_chart(_job_type_counts(df).set_index("Job Type"), width='stretch')
+    a_l, a_r = st.columns(2)
+    with a_l:
+        st.markdown("**By Status**")
+        st.bar_chart(_status_counts(df).rename(columns={"Count": "Applications"}).set_index("Status"), width="stretch")
+    with a_r:
+        st.markdown("**By Job Type**")
+        st.bar_chart(_job_type_counts(df).set_index("Job Type"), width="stretch")
 
 
-def render_application_table(status_filter: str, search_text: str = "") -> None:
-    df = _build_pipeline_df(status_filter, search_text)
+def render_application_table(status_filters: list, search_text: str = "", sort_by: str = "Date (newest)") -> None:
+    df = _build_pipeline_df(status_filters, search_text, sort_by)
     if df.empty:
         st.info("No applications match the current filters.")
         return
 
+    st.caption(f"{len(df)} application(s)")
     st.dataframe(
         df,
         hide_index=True,
-        width='stretch',
+        width="stretch",
         column_config={
             "ID":           st.column_config.NumberColumn(width="small"),
             "Organization": st.column_config.TextColumn(width="medium"),
-            "Role":         st.column_config.TextColumn(width="medium"),
+            "Role":         st.column_config.TextColumn(width="large"),
             "Status":       st.column_config.TextColumn(width="small"),
             "Applied":      st.column_config.TextColumn(width="small"),
             "Location":     st.column_config.TextColumn(width="small"),
             "Type":         st.column_config.TextColumn(width="small"),
             "Stage":        st.column_config.TextColumn(width="small"),
-            "Follow-Up":    st.column_config.TextColumn(width="small"),
+            "⚠️":           st.column_config.TextColumn(width="small"),
         },
     )
+
 
 
 
