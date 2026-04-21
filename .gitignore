@@ -24,3 +24,16 @@ dist/
 *.egg-info
 
 data/
+
+exports/
+images/
+.env
+__pycache__/
+*.pyc
+
+exports/
+images/
+.env
+__pycache__/
+*.pyc
+*.csv
